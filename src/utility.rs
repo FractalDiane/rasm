@@ -16,7 +16,25 @@ enum Operation {
 	Hi8,
 }
 
-pub fn parse_value(value: &str, constants: &HashMap<String, u16>, labels: &HashMap<String, u16>) -> Option<u16> {
+pub fn parse_expression(expr: &str, constants: &HashMap<String, u16>, labels: &HashMap<String, u16>) -> Option<u16> {
+	if expr.contains('+') {
+		let mut split = expr.split('+');
+		let left = split.next().unwrap().trim();
+		let right = split.next().unwrap().trim();
+		let rleft = parse_value(left, constants, labels);
+		let rright = parse_value(right, constants, labels);
+		
+		if rleft.is_some() && rright.is_some() {
+			Some(rleft.unwrap() + rright.unwrap())
+		} else {
+			None
+		}
+	} else {
+		parse_value(expr, constants, labels)
+	}
+}
+
+fn parse_value(value: &str, constants: &HashMap<String, u16>, labels: &HashMap<String, u16>) -> Option<u16> {
 	let (val, op) = if value.starts_with('<') {
 		(&value[1..], Operation::Lo8)
 	} else if value.starts_with('>') {

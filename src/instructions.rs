@@ -27,7 +27,7 @@ fn addr_default(op_str: &str, mnemonic_map: &HashMap<AddressMode, u8>, constants
 		return (AddressMode::Implied, vec![]);
 	}
 
-	let op = match parse_value(op_str, constants, labels) {
+	let op = match parse_expression(op_str, constants, labels) {
 		Some(v) => v,
 		None => {
 			if *pass != Pass::Main {
@@ -57,7 +57,7 @@ pub fn get_instruction_bytes(mnemonic: &str, operand: &str, constants: &HashMap<
 
 	for re in regexes::ADDR_REGEXES.iter() {
 		if let Some(matches) = re.0.captures(operand) {
-			let op = match parse_value(&matches[1], constants, labels) {
+			let op = match parse_expression(&matches[1], constants, labels) {
 				Some(o) => o,
 				None => {
 					if *pass == Pass::Label {

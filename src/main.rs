@@ -33,7 +33,7 @@ fn assemble(file: &File, pass: Pass, labels: &mut HashMap<String, u16>, constant
 		if let Some(matches) = regexes::REGEX_ASSIGN.captures(trimmed) {
 			let name = &matches[1];
 			let value_str = &matches[2];
-			let value = parse_value(value_str, &constants, &labels).expect("TODO: Undefined Symbol");
+			let value = parse_expression(value_str, &constants, &labels).expect("TODO: Undefined Symbol");
 
 			if name == "*" {
 				load_addr = value;
@@ -50,7 +50,7 @@ fn assemble(file: &File, pass: Pass, labels: &mut HashMap<String, u16>, constant
 				match &matches[1] {
 					"byte" => {
 						let bytes = matches[2].split(',').map(|b| {
-							let byte = parse_value(b.trim(), &constants, &labels);
+							let byte = parse_expression(b.trim(), &constants, &labels);
 							match byte {
 								Some(b) => b as u8,
 								None => {
