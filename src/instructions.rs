@@ -6,7 +6,7 @@ use crate::regexes;
 use crate::utility::*;
 use crate::Pass;
 
-#[derive(Hash, PartialEq, Eq, Debug)]
+#[derive(Hash, PartialEq, Eq)]
 pub enum AddressMode {
 	Implied,
 	Immediate,
@@ -22,7 +22,7 @@ pub enum AddressMode {
 	IndirectY,
 }
 
-fn addr_default(op_str: &str, mnemonic_map: &HashMap<AddressMode, u8>, constants: &HashMap<String, u16>, labels: &HashMap<String, u16>, program_counter: usize, pass: &Pass) -> (AddressMode, Vec<u8>) {
+fn addr_default(op_str: &str, mnemonic_map: &HashMap<AddressMode, u8>, constants: &HashMap<String, u16>, labels: &HashMap<String, u16>, program_counter: usize, line_num: usize, pass: &Pass) -> (AddressMode, Vec<u8>) {
 	if op_str.is_empty() || op_str == "a" {
 		return (AddressMode::Implied, vec![]);
 	}
@@ -33,7 +33,7 @@ fn addr_default(op_str: &str, mnemonic_map: &HashMap<AddressMode, u8>, constants
 			if *pass != Pass::Main {
 				0xffff
 			} else {
-				panic!("TODO: Undefined value");
+				panic!("Line {}: Undefined symbol \"{}\"", line_num, op_str);
 			}
 		},
 	};
@@ -50,25 +50,25 @@ fn addr_default(op_str: &str, mnemonic_map: &HashMap<AddressMode, u8>, constants
 	}
 }
 
-pub fn get_instruction_bytes(mnemonic: &str, operand: &str, constants: &HashMap<String, u16>, labels: &HashMap<String, u16>, program_counter: usize, pass: &Pass) -> Vec<u8> {
+pub fn get_instruction_bytes(mnemonic: &str, operand: &str, constants: &HashMap<String, u16>, labels: &HashMap<String, u16>, program_counter: usize, line_num: usize, pass: &Pass) -> Vec<u8> {
 	let mut addr_mode = AddressMode::Implied;
 	let mut operand_vec = Vec::<u8>::new();
 	let mut matched = false;
 
-	for re in regexes::ADDR_REGEXES.iter() {
-		if let Some(matches) = re.0.captures(operand) {
+	for regex in regexes::ADDR_REGEXES.iter() {
+		if let Some(matches) = regex.0.captures(operand) {
 			let op = match parse_expression(&matches[1], constants, labels) {
 				Some(o) => o,
 				None => {
 					if *pass == Pass::Label {
 						u16::MAX
 					} else {
-						panic!("Undefined symbol {}", &matches[1]);
+						panic!("Line {}: Undefined symbol \"{}\"", line_num, &matches[1]);
 					}
 				},
 			};
 
-			let result = (re.1)(op);
+			let result = (regex.1)(op);
 
 			addr_mode = result.0;
 			operand_vec = result.1;
@@ -80,7 +80,7 @@ pub fn get_instruction_bytes(mnemonic: &str, operand: &str, constants: &HashMap<
 	let mnemonic_map = OPCODES.get(mnemonic).unwrap();
 
 	if !matched {
-		let result = addr_default(operand, &mnemonic_map, constants, labels, program_counter, pass);
+		let result = addr_default(operand, &mnemonic_map, constants, labels, program_counter, line_num, pass);
 		addr_mode = result.0;
 		operand_vec = result.1;
 	}

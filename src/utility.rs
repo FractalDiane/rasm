@@ -16,8 +16,16 @@ enum Operation {
 	Hi8,
 }
 
-pub fn parse_expression(expr: &str, constants: &HashMap<String, u16>, labels: &HashMap<String, u16>) -> Option<u16> {
-	if expr.contains('+') {
+pub fn parse_expression(expression: &str, constants: &HashMap<String, u16>, labels: &HashMap<String, u16>) -> Option<u16> {
+	let (expr, op) = if expression.starts_with('<') {
+		(&expression[1..], Operation::Lo8)
+	} else if expression.starts_with('>') {
+		(&expression[1..], Operation::Hi8)
+	} else {
+		(expression, Operation::None)
+	};
+	
+	let result = if expr.contains('+') {
 		let mut split = expr.split('+');
 		let left = split.next().unwrap().trim();
 		let right = split.next().unwrap().trim();
@@ -29,32 +37,20 @@ pub fn parse_expression(expr: &str, constants: &HashMap<String, u16>, labels: &H
 		} else {
 			None
 		}
+	} else if expr.contains('-') {
+		let mut split = expr.split('-');
+		let left = split.next().unwrap().trim();
+		let right = split.next().unwrap().trim();
+		let rleft = parse_value(left, constants, labels);
+		let rright = parse_value(right, constants, labels);
+		
+		if rleft.is_some() && rright.is_some() {
+			Some(rleft.unwrap() - rright.unwrap())
+		} else {
+			None
+		}
 	} else {
 		parse_value(expr, constants, labels)
-	}
-}
-
-fn parse_value(value: &str, constants: &HashMap<String, u16>, labels: &HashMap<String, u16>) -> Option<u16> {
-	let (val, op) = if value.starts_with('<') {
-		(&value[1..], Operation::Lo8)
-	} else if value.starts_with('>') {
-		(&value[1..], Operation::Hi8)
-	} else {
-		(value, Operation::None)
-	};
-
-	let result = match parse_num(val) {
-		Ok(num) => Some(num),
-		Err(_) => {
-			let string = val.to_string();
-			if constants.contains_key(&string) {
-				Some(constants[&string])
-			} else if labels.contains_key(&string) {
-				Some(labels[&string])
-			} else {
-				None
-			}
-		},
 	};
 
 	match op {
@@ -74,12 +70,33 @@ fn parse_value(value: &str, constants: &HashMap<String, u16>, labels: &HashMap<S
 	}
 }
 
-pub fn parse_num(num: &str) -> Result<u16, std::num::ParseIntError> {
+fn parse_value(value: &str, constants: &HashMap<String, u16>, labels: &HashMap<String, u16>) -> Option<u16> {
+	match parse_num(value) {
+		Some(num) => Some(num),
+		None => {
+			let string = value.to_string();
+			if constants.contains_key(&string) {
+				Some(constants[&string])
+			} else if labels.contains_key(&string) {
+				Some(labels[&string])
+			} else {
+				None
+			}
+		},
+	}
+}
+
+pub fn parse_num(num: &str) -> Option<u16> {
 	if num.starts_with('$') {
-		u16::from_str_radix(&num[1..], 16)
+		u16::from_str_radix(&num[1..], 16).ok()
 	} else if num.starts_with('%') {
-		u16::from_str_radix(&num[1..], 2)
+		u16::from_str_radix(&num[1..], 2).ok()
+	} else if num.starts_with('"') || num.starts_with('\'') {
+		match &num[1..=1].parse::<char>() {
+			Ok(c) => Some((*c as u8) as u16),
+			Err(_) => None,
+		}
 	} else {
-		u16::from_str_radix(num, 10)
+		u16::from_str_radix(num, 10).ok()
 	}
 }
