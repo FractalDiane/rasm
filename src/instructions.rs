@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use crate::regexes;
 use crate::utility::*;
-use crate::Pass;
+use crate::{Pass, AssemblyState, ErrorMsg, rasm_error};
 
 #[derive(Hash, PartialEq, Eq)]
 pub enum AddressMode {
@@ -22,24 +22,24 @@ pub enum AddressMode {
 	IndirectY,
 }
 
-fn addr_default(op_str: &str, mnemonic_map: &HashMap<AddressMode, u8>, constants: &HashMap<String, u16>, labels: &HashMap<String, u16>, program_counter: usize, line_num: usize, pass: &Pass) -> (AddressMode, Vec<u8>) {
+fn addr_default(op_str: &str, mnemonic_map: &HashMap<AddressMode, u8>, assembly_state: &mut AssemblyState) -> (AddressMode, Vec<u8>) {
 	if op_str.is_empty() || op_str == "a" {
 		return (AddressMode::Implied, vec![]);
 	}
 
-	let op = match parse_expression(op_str, constants, labels) {
+	let op = match parse_expression(op_str, assembly_state) {
 		Some(v) => v,
 		None => {
-			if *pass != Pass::Main {
+			if assembly_state.pass != Pass::Main {
 				0xffff
 			} else {
-				panic!("Line {}: Undefined symbol \"{}\"", line_num, op_str);
+				rasm_error!(assembly_state.line_num, "Undefined symbol \"{}\"", op_str);
 			}
 		},
 	};
 
 	if mnemonic_map.contains_key(&AddressMode::Relative) {
-		let diff = !(program_counter as isize - op as isize) - 1;
+		let diff = !(assembly_state.program_counter as isize - op as isize) - 1;
 		(AddressMode::Relative, vec![diff as u8])
 	} else {
 		if op < u8::MAX as u16 {
@@ -50,20 +50,20 @@ fn addr_default(op_str: &str, mnemonic_map: &HashMap<AddressMode, u8>, constants
 	}
 }
 
-pub fn get_instruction_bytes(mnemonic: &str, operand: &str, constants: &HashMap<String, u16>, labels: &HashMap<String, u16>, program_counter: usize, line_num: usize, pass: &Pass) -> Vec<u8> {
+pub fn get_instruction_bytes(mnemonic: &str, operand: &str, assembly_state: &mut AssemblyState) -> Vec<u8> {
 	let mut addr_mode = AddressMode::Implied;
 	let mut operand_vec = Vec::<u8>::new();
 	let mut matched = false;
 
 	for regex in regexes::ADDR_REGEXES.iter() {
 		if let Some(matches) = regex.0.captures(operand) {
-			let op = match parse_expression(&matches[1], constants, labels) {
+			let op = match parse_expression(&matches[1], assembly_state) {
 				Some(o) => o,
 				None => {
-					if *pass == Pass::Label {
+					if assembly_state.pass == Pass::Label {
 						u16::MAX
 					} else {
-						panic!("Line {}: Undefined symbol \"{}\"", line_num, &matches[1]);
+						rasm_error!(assembly_state.line_num, "Undefined symbol \"{}\"", &matches[1]);
 					}
 				},
 			};
@@ -80,7 +80,7 @@ pub fn get_instruction_bytes(mnemonic: &str, operand: &str, constants: &HashMap<
 	let mnemonic_map = OPCODES.get(mnemonic).unwrap();
 
 	if !matched {
-		let result = addr_default(operand, &mnemonic_map, constants, labels, program_counter, line_num, pass);
+		let result = addr_default(operand, &mnemonic_map, assembly_state);
 		addr_mode = result.0;
 		operand_vec = result.1;
 	}

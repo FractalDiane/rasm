@@ -15,7 +15,7 @@ lazy_static! {
 	pub static ref REGEX_ASSIGN: Regex = Regex::new(r"^([\w\*]+)\s*=\s*(.+)$").unwrap();
 	pub static ref REGEX_INSTR: Regex = Regex::new(r"^(\w{3})(?:\s+(.+))?$").unwrap();
 	pub static ref REGEX_LABEL: Regex = Regex::new(r"^(\w+):$").unwrap();
-	pub static ref REGEX_PSEUDO: Regex = Regex::new(r"^\.(\w+)\s+(.+)$").unwrap();
+	pub static ref REGEX_PSEUDO: Regex = Regex::new(r"^\.(\w+)(?:\s+(.+))?$").unwrap();
 
 	pub static ref ADDR_REGEXES: Vec<(Regex, fn(u16) -> (AddressMode, Vec<u8>))> = vec![
 

@@ -17,6 +17,8 @@ use crate::utility::*;
 use crate::target::*;
 use crate::instructions::get_instruction_bytes;
 
+use maplit::hashmap;
+
 #[derive(PartialEq)]
 pub enum Pass {
 	Constant,
@@ -24,10 +26,47 @@ pub enum Pass {
 	Main,
 }
 
-fn assemble(file: &File, pass: Pass, target: &Target, labels: &mut HashMap<String, u16>, constants: &mut HashMap<String, u16>) -> (Vec<u8>, u16) {
-	let mut line_num = 1;
-	let (mut program_counter, mut load_addr) = (0x0801usize, 0x0801u16);
+pub struct AssemblyState {
+	pub target: Target,
+	pub pass: Pass,
+
+	pub line_num: usize,
+	pub program_counter: usize,
+
+	pub current_block: isize,
+	pub max_block: isize,
+
+	pub labels: HashMap<isize, HashMap<String, u16>>,
+	pub constants: HashMap<String, u16>,
+}
+
+pub struct ErrorMsg {
+	msg: String,
+	line_num: usize,
+}
+
+impl ErrorMsg {
+	pub fn new(msg: String, line_num: usize) -> Self {
+		Self{msg, line_num}
+	}
+}
+
+#[macro_export]
+macro_rules! rasm_error {
+	($line:expr, $fmt:literal, $($arg:tt)*) => {
+		std::panic::panic_any(ErrorMsg::new(
+			format!($fmt, $($arg)*),
+			$line,
+		));
+	};
+}
+
+fn assemble(file: &File, assembly_state: &mut AssemblyState) -> (Vec<u8>, u16) {
+	let mut load_addr = 0x0801u16;
 	let mut code = vec![0, 0];
+	assembly_state.line_num = 1;
+	assembly_state.current_block = -1;
+	assembly_state.max_block = -1;
 
 	for ln in io::BufReader::new(file).lines() {
 		let line = ln.unwrap();
@@ -43,64 +82,79 @@ fn assemble(file: &File, pass: Pass, target: &Target, labels: &mut HashMap<Strin
 		if let Some(matches) = regexes::REGEX_ASSIGN.captures(trimmed) {
 			let name = &matches[1];
 			let value_str = &matches[2];
-			let value = parse_expression(value_str, &constants, &labels)
-				.expect(&format!("Line {}: Undefined label \"{}\"", line_num, &matches[2]));
+			let value = match parse_expression(value_str, assembly_state) {
+				Some(val) => val,
+				None => {
+					rasm_error!(assembly_state.line_num, "Unidentified label \"{}\"", &matches[2]);
+				},
+			};
 			
 			if name == "*" {
 				load_addr = value;
-				program_counter = value as usize;
-			} else if pass == Pass::Constant {
-				constants.insert(name.into(), value);
+				assembly_state.program_counter = value as usize;
+			} else if assembly_state.pass == Pass::Constant {
+				assembly_state.constants.insert(name.into(), value);
 			}
 		} else if let Some(matches) = regexes::REGEX_LABEL.captures(trimmed) {
-			if pass == Pass::Label {
-				labels.insert(matches[1].into(), program_counter as u16);
+			if assembly_state.pass == Pass::Label {
+				let current_labels = assembly_state.labels.get_mut(&assembly_state.current_block).unwrap();
+				current_labels.insert(matches[1].into(), assembly_state.program_counter as u16);
 			}
 		} else if let Some(matches) = regexes::REGEX_PSEUDO.captures(trimmed) {
-			if pass != Pass::Constant {
+			if assembly_state.pass != Pass::Constant {
 				match &matches[1] {
+					"block" => {
+						assembly_state.max_block += 1;
+						assembly_state.current_block = assembly_state.max_block;
+						if assembly_state.pass == Pass::Label {
+							assembly_state.labels.insert(assembly_state.current_block, hashmap!{});
+						}
+					},
+					"bend" => {
+						assembly_state.current_block = -1;
+					},
 					"byte" => {
 						let bytes = matches[2].split(',').map(|b| {
-							let byte = parse_expression(b.trim(), &constants, &labels);
+							let byte = parse_expression(b.trim(), assembly_state);
 							match byte {
 								Some(b) => b as u8,
 								None => {
-									if pass == Pass::Label {
+									if assembly_state.pass == Pass::Label {
 										u8::MAX
 									} else {
-										panic!("Line {}: Undefined symbol \"{}\"", line_num, &matches[2]);
+										rasm_error!(assembly_state.line_num, "Undefined symbol \"{}\"", &matches[2]);
 									}
 								},
 							}
 						}).collect::<Vec<u8>>();
 						
-						program_counter += bytes.len();
-						if pass == Pass::Main {
+						assembly_state.program_counter += bytes.len();
+						if assembly_state.pass == Pass::Main {
 							code.extend(bytes);
 						}
 					},
 					"word" => {
 						let words = matches[2].split(',').map(|w| {
-							let word = parse_expression(w.trim(), &constants, &labels);
+							let word = parse_expression(w.trim(), assembly_state);
 							match word {
 								Some(w) => w,
 								None => {
-									if pass == Pass::Label {
+									if assembly_state.pass == Pass::Label {
 										u16::MAX
 									} else {
-										panic!("Line {}: Undefined symbol \"{}\"", line_num, &matches[2]);
+										rasm_error!(assembly_state.line_num, "Undefined symbol \"{}\"", &matches[2]);
 									}
 								}
 							}
 						}).collect::<Vec<u16>>();
 
-						program_counter += 2 * words.len();
-						if pass == Pass::Main {
+						assembly_state.program_counter += 2 * words.len();
+						if assembly_state.pass == Pass::Main {
 							code.extend(words.iter().fold(vec![], |mut vec, w| { vec.extend(vec![lo8(*w), hi8(*w)]); vec }));
 						}
 					},
 					"addrstring" => {
-						let bytes = match parse_expression(&matches[2], &constants, &labels) {
+						let bytes = match parse_expression(&matches[2], assembly_state) {
 							Some(v) => {
 								let mut vec = vec![];
 								let string = v.to_string();
@@ -112,66 +166,66 @@ fn assemble(file: &File, pass: Pass, target: &Target, labels: &mut HashMap<Strin
 								vec
 							},
 							None => {
-								if pass == Pass::Label {
+								if assembly_state.pass == Pass::Label {
 									vec![b'0'; 5]
 								} else {
-									panic!("Line {}: Undefined label \"{}\"", line_num, &matches[2]);
+									rasm_error!(assembly_state.line_num, "Undefined label \"{}\"", &matches[2]);
 								}
 							},
 						};
 
-						program_counter += bytes.len();
-						if pass == Pass::Main {
+						assembly_state.program_counter += bytes.len();
+						if assembly_state.pass == Pass::Main {
 							code.extend(bytes);
 						}
 					},
 					"string" => {
 						let text = matches[2].trim_matches('"');
-						let vec = text.chars().map(|c| char_format(c as u8, target)).collect::<Vec<u8>>();
-						program_counter += vec.len();
-						if pass == Pass::Main {
+						let vec = text.chars().map(|c| char_format(c as u8, &assembly_state.target)).collect::<Vec<u8>>();
+						assembly_state.program_counter += vec.len();
+						if assembly_state.pass == Pass::Main {
 							code.extend(vec);
 						}
 					},
 					"cstring" => {
 						let text = matches[2].trim_matches('"');
-						let vec = text.chars().map(|c| char_format(c as u8, target)).collect::<Vec<u8>>();
-						program_counter += vec.len() + 1;
-						if pass == Pass::Main {
+						let vec = text.chars().map(|c| char_format(c as u8, &assembly_state.target)).collect::<Vec<u8>>();
+						assembly_state.program_counter += vec.len() + 1;
+						if assembly_state.pass == Pass::Main {
 							code.extend(vec);
 							code.push(0);
 						}
 					},
 					"cbmstring" => {
 						let text = matches[2].trim_matches('"');
-						let mut chars = text.chars().map(|c| char_format(c as u8, target)).collect::<Vec<u8>>();
+						let mut chars = text.chars().map(|c| char_format(c as u8, &assembly_state.target)).collect::<Vec<u8>>();
 						*chars.last_mut().unwrap() |= 0x80;
-						program_counter += chars.len();
-						if pass == Pass::Main {
+						assembly_state.program_counter += chars.len();
+						if assembly_state.pass == Pass::Main {
 							code.extend(chars);
 						}
 					},
 					_ => {
-						panic!("Line {}: Invalid pseudo-op \"{}\"", line_num, &matches[1]);
+						rasm_error!(assembly_state.line_num, "Invalid pseudo-op \"{}\"", &matches[1]);
 					},
 				}
 			}
 		} else if let Some(matches) = regexes::REGEX_INSTR.captures(trimmed) {
-			if pass != Pass::Constant {
+			if assembly_state.pass != Pass::Constant {
 				let mnemonic = &matches[1].to_lowercase();
 				let operand = &matches.get(2).map_or("", |m| m.as_str());
 
-				let bytes = get_instruction_bytes(mnemonic, operand, &constants, &labels, program_counter, line_num, &pass);
-				program_counter += bytes.len();
-				if pass == Pass::Main {
+				let bytes = get_instruction_bytes(mnemonic, operand, assembly_state);
+				assembly_state.program_counter += bytes.len();
+				if assembly_state.pass == Pass::Main {
 					code.extend(bytes);
 				}
 			}
 		} else if !trimmed.is_empty() {
-			panic!("Line {}: Invalid syntax\n\t{}", line_num, trimmed);
+			rasm_error!(assembly_state.line_num, "Invalid syntax \"{}\"", trimmed);
 		}
 
-		line_num += 1;
+		assembly_state.line_num += 1;
 	}
 
 	(code, load_addr)
@@ -179,8 +233,14 @@ fn assemble(file: &File, pass: Pass, target: &Target, labels: &mut HashMap<Strin
 
 fn main() {
 	std::panic::set_hook(Box::new(|info| {
-		if let Some(error) = info.payload().downcast_ref::<String>() {
-			eprintln!("\x1b[0;91mERROR:\x1b[0m {}", error);
+		if let Some(error) = info.payload().downcast_ref::<ErrorMsg>() {
+			let line_str = if error.line_num > 0 {
+				format!("Line {}:", error.line_num)
+			} else {
+				String::new()
+			};
+
+			eprintln!("\x1b[0;91mERROR:\x1b[0m {} {}", line_str, error.msg);
 		} else {
 			eprintln!("\x1b[0;91mERROR:\x1b[0m (Couldn't parse error)");
 		}
@@ -197,11 +257,16 @@ fn main() {
 	while let Some(arg) = args.next() {
 		match arg.as_str() {
 			"-o" => {
-				output_file = args.peek().expect(&format!("{}", "No valid output file specified")).to_string();
+				output_file = args.peek().unwrap_or_else(
+					|| rasm_error!(0, "{}", "No valid output file specified")
+				).to_string();
+				
 				args.next().unwrap();
 			},
 			"-t" => {
-				target = Target::from_string(args.peek().expect(&format!("{}", "No valid target specified")));
+				target = Target::from_string(args.peek().unwrap_or_else(
+					|| rasm_error!(0, "{}", "No valid target specified")
+				));
 				args.next().unwrap();
 			},
 			_ => {
@@ -224,21 +289,35 @@ fn main() {
 	}
 
 	if !input_file_given {
-		panic!("{}", "No input file specified");
+		rasm_error!(0, "{}", "No input file specified");
 	}
 
-	let mut infile = File::open(&input_file).expect(&format!("Failed to open input file {}", &input_file));
+	let mut infile = File::open(&input_file).unwrap_or_else(
+		|_| rasm_error!(0, "Failed to open input file {}", &input_file)
+	);
 
-	let mut labels = HashMap::<String, u16>::new();
-	let mut constants = HashMap::<String, u16>::new();
+	let constants = HashMap::<String, u16>::new();
+	let mut labels = HashMap::<isize, HashMap<String, u16>>::new();
+	labels.insert(-1, hashmap!{});
 
-	assemble(&infile, Pass::Constant, &target, &mut labels, &mut constants);
-	infile.seek(SeekFrom::Start(0)).expect("Error occurred while parsing file");
-	assemble(&infile, Pass::Label, &target, &mut labels, &mut constants);
-	infile.seek(SeekFrom::Start(0)).expect("Error occurred while parsing file");
-	let (mut code, load_addr) = assemble(&infile, Pass::Main, &target, &mut labels, &mut constants);
+	let mut assembly_state = AssemblyState{
+		target, pass: Pass::Constant,
+		line_num: 1, program_counter: 0,
+		current_block: -1, max_block: -1,
+		constants, labels,
+	};
+
+	assemble(&infile, &mut assembly_state);
+	infile.seek(SeekFrom::Start(0)).unwrap_or_else(|_| rasm_error!(0, "{}", "Error occurred while parsing file"));
+	assembly_state.pass = Pass::Label;
+	assemble(&infile, &mut assembly_state);
+	infile.seek(SeekFrom::Start(0)).unwrap_or_else(|_| rasm_error!(0, "{}", "Error occurred while parsing file"));
+	assembly_state.pass = Pass::Main;
+	let (mut code, load_addr) = assemble(&infile, &mut assembly_state);
 
 	code[0] = lo8(load_addr);
 	code[1] = hi8(load_addr);
-	fs::write(&output_file, code).expect(&format!("Failed to write to output file {}", &output_file));
+	fs::write(&output_file, code).unwrap_or_else(
+		|_| rasm_error!(0, "Failed to write to output file {}", &output_file)
+	);
 }

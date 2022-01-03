@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use crate::AssemblyState;
 
 #[inline(always)]
 pub fn lo8(n: u16) -> u8 {
@@ -16,7 +16,7 @@ enum Operation {
 	Hi8,
 }
 
-pub fn parse_expression(expression: &str, constants: &HashMap<String, u16>, labels: &HashMap<String, u16>) -> Option<u16> {
+pub fn parse_expression(expression: &str, asm_state: &mut AssemblyState) -> Option<u16> {
 	let (expr, op) = if expression.starts_with('<') {
 		(&expression[1..], Operation::Lo8)
 	} else if expression.starts_with('>') {
@@ -29,8 +29,8 @@ pub fn parse_expression(expression: &str, constants: &HashMap<String, u16>, labe
 		let mut split = expr.split('+');
 		let left = split.next().unwrap().trim();
 		let right = split.next().unwrap().trim();
-		let rleft = parse_value(left, constants, labels);
-		let rright = parse_value(right, constants, labels);
+		let rleft = parse_value(left, asm_state);
+		let rright = parse_value(right, asm_state);
 		
 		if rleft.is_some() && rright.is_some() {
 			Some(rleft.unwrap() + rright.unwrap())
@@ -41,8 +41,8 @@ pub fn parse_expression(expression: &str, constants: &HashMap<String, u16>, labe
 		let mut split = expr.split('-');
 		let left = split.next().unwrap().trim();
 		let right = split.next().unwrap().trim();
-		let rleft = parse_value(left, constants, labels);
-		let rright = parse_value(right, constants, labels);
+		let rleft = parse_value(left, asm_state);
+		let rright = parse_value(right, asm_state);
 		
 		if rleft.is_some() && rright.is_some() {
 			Some(rleft.unwrap() - rright.unwrap())
@@ -50,7 +50,7 @@ pub fn parse_expression(expression: &str, constants: &HashMap<String, u16>, labe
 			None
 		}
 	} else {
-		parse_value(expr, constants, labels)
+		parse_value(expr, asm_state)
 	};
 
 	match op {
@@ -70,15 +70,16 @@ pub fn parse_expression(expression: &str, constants: &HashMap<String, u16>, labe
 	}
 }
 
-fn parse_value(value: &str, constants: &HashMap<String, u16>, labels: &HashMap<String, u16>) -> Option<u16> {
+fn parse_value(value: &str, asm_state: &mut AssemblyState) -> Option<u16> {
+	let current_labels = &asm_state.labels[&asm_state.current_block];
 	match parse_num(value) {
 		Some(num) => Some(num),
 		None => {
 			let string = value.to_string();
-			if constants.contains_key(&string) {
-				Some(constants[&string])
-			} else if labels.contains_key(&string) {
-				Some(labels[&string])
+			if asm_state.constants.contains_key(&string) {
+				Some(asm_state.constants[&string])
+			} else if current_labels.contains_key(&string) {
+				Some(current_labels[&string])
 			} else {
 				None
 			}
