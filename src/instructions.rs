@@ -42,7 +42,7 @@ fn addr_default(op_str: &str, mnemonic_map: &HashMap<AddressMode, u8>, assembly_
 		let diff = !(assembly_state.program_counter as isize - op as isize) - 1;
 		(AddressMode::Relative, vec![diff as u8])
 	} else {
-		if op < u8::MAX as u16 {
+		if op <= u8::MAX as u16 {
 			(AddressMode::Zeropage, vec![op as u8])
 		} else {
 			(AddressMode::Absolute, vec![lo8(op), hi8(op)])
